@@ -1,124 +1,141 @@
+import sqlite3
 from datetime import date
-from models.emprunt import Emprunt
 from models.livre import Livre
-import json
-
 from models.membre import Membre
-
+from models.emprunt import Emprunt
 
 class Bibliotheque:
+    def __init__(self, chemin_db="data/bibliotheque.db"):
+        # 1. Connexion à la base (créera le fichier si absent)
+        self.conn = sqlite3.connect(chemin_db)
+        self.curseur = self.conn.cursor()
+        self.creer_tables()
 
-    def __init__(self):
-        self.livres = []
-        self.membres = []
-        self.emprunts = []
-        self.disponible=[]
-    def ajouter_livre(self,livre):
-          self.livres.append(livre)
+    def creer_tables(self):
+        # Création des 3 tables si elles n'existent pas
+        self.curseur.execute("""
+            CREATE TABLE IF NOT EXISTS livres (
+                isbn TEXT PRIMARY KEY,
+                titre TEXT,
+                auteur TEXT,
+                maison_edition TEXT,
+                disponible INTEGER
+            )
+        """)
+        self.curseur.execute("""
+            CREATE TABLE IF NOT EXISTS membres (
+                id_membre TEXT PRIMARY KEY,
+                nom TEXT,
+                prenoms TEXT
+            )
+        """)
+        self.curseur.execute("""
+            CREATE TABLE IF NOT EXISTS emprunts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                isbn TEXT,
+                id_membre TEXT,
+                date_emprunt TEXT,
+                date_rendu TEXT
+            )
+        """)
+        self.conn.commit()
 
-    def ajouter_membre(self,membre):
-        self.membres.append(membre)
+    # --- AJOUTS ---
+    def ajouter_livre(self, livre):
+        try:
+            self.curseur.execute("INSERT INTO livres VALUES (?, ?, ?, ?, ?)",
+                                 (livre.isbn, livre.titre, livre.auteur, livre.maison_edition, int(livre.disponible)))
+            self.conn.commit()
+        except sqlite3.IntegrityError:
+            return "Erreur : Ce livre existe déjà."
 
-    def ajouter_emprunt(self,emprunt):
-        self.emprunts.append(emprunt)
+    def ajouter_membre(self, membre):
+        try:
+            self.curseur.execute("INSERT INTO membres VALUES (?, ?, ?)",
+                                 (membre.id_membre, membre.nom, membre.prenoms))
+            self.conn.commit()
+        except sqlite3.IntegrityError:
+            return "Erreur : Ce membre existe déjà."
 
-    def trouver_livre_par_isbn(self,isbn):
-        for livre in self.livres:
-            if livre.isbn==isbn:
-                return livre
+    # --- RECHERCHES ---
+    def trouver_livre_par_isbn(self, isbn):
+        self.curseur.execute("SELECT * FROM livres WHERE isbn = ?", (isbn,))
+        res = self.curseur.fetchone()
+        if res:
+            return Livre(res[0], res[1], res[2], res[3], bool(res[4]))
         return None
 
-
-    def trouver_membre_par_id(self,id_membre):
-        for membre in self.membres:
-            if membre.id_membre == id_membre:
-                return membre
+    def trouver_membre_par_id(self, id_membre):
+        self.curseur.execute("SELECT * FROM membres WHERE id_membre = ?", (id_membre,))
+        res = self.curseur.fetchone()
+        if res:
+            membre = Membre(res[0], res[1], res[2])
+            # On récupère ses livres en cours d'emprunt
+            self.curseur.execute("SELECT isbn FROM emprunts WHERE id_membre = ? AND date_rendu IS NULL", (id_membre,))
+            membre.livres_empruntes = [ligne[0] for ligne in self.curseur.fetchall()]
+            return membre
         return None
 
-    def emprunter_livre(self,isbn,id_membre):
-        livre=self.trouver_livre_par_isbn(isbn)
-        membre=self.trouver_membre_par_id(id_membre)
+    # --- EMPRUNT & RETOUR ---
+    def emprunter_livre(self, isbn, id_membre):
+        livre = self.trouver_livre_par_isbn(isbn)
+        membre = self.trouver_membre_par_id(id_membre)
 
-        if livre is None:
-            return "Erreur:Livre introuvable"
+        if livre is None: return "Erreur : Livre introuvable"
+        if membre is None: return "Erreur : Membre introuvable"
+        if not livre.disponible: return "Erreur : Livre déjà emprunté"
 
-        if membre is None:
-            return "Erreur:Membre introuvable"
-
-        if not livre.disponible:
-            return "Erreur:Livre disponible"
-
-        livre.disponible = False
-        membre.livres_empruntes.append(isbn)
-
-        nouvel_emprunt = Emprunt(isbn, id_membre, str(date.today()))
-        self.ajouter_emprunt(nouvel_emprunt)
+        # Mise à jour du livre
+        self.curseur.execute("UPDATE livres SET disponible = 0 WHERE isbn = ?", (isbn,))
+        # Création de l'emprunt
+        self.curseur.execute("INSERT INTO emprunts (isbn, id_membre, date_emprunt) VALUES (?, ?, ?)",
+                             (isbn, id_membre, str(date.today())))
+        self.conn.commit()
         return "Le livre a bien été emprunté !"
 
-    def rendre_livre(self,isbn,id_membre):
-        livre=self.trouver_livre_par_isbn(isbn)
-        membre=self.trouver_membre_par_id(id_membre)
-        if livre is None:
-            return "Erreur : Livre introuvable"
-        if membre is None:
-            return "Erreur : Membre introuvable"
-        if livre.disponible:
-            return "Erreur : Ce livre est déjà dans la bibliothèque (non emprunté)."
+    def rendre_livre(self, isbn, id_membre):
+        livre = self.trouver_livre_par_isbn(isbn)
+        membre = self.trouver_membre_par_id(id_membre)
 
-        if isbn not in membre.livres_empruntes:
-            return "Erreur : Ce membre n'a pas emprunté ce livre."
-        livre.disponible = True
-        membre.livres_empruntes.remove(isbn)
-        for emprunt in self.emprunts:
-            if emprunt.isbn == isbn and emprunt.id_membre == id_membre and emprunt.date_rendu is None:
-             emprunt.cloturer(str(date.today()))  # On utilise ta méthode !
+        if livre is None: return "Erreur : Livre introuvable"
+        if membre is None: return "Erreur : Membre introuvable"
+        if livre.disponible: return "Erreur : Ce livre est déjà disponible"
+        if isbn not in membre.livres_empruntes: return "Erreur : Ce membre n'a pas ce livre"
+
+        # Mise à jour du livre
+        self.curseur.execute("UPDATE livres SET disponible = 1 WHERE isbn = ?", (isbn,))
+        # Clôture de l'emprunt
+        self.curseur.execute("""
+            UPDATE emprunts SET date_rendu = ? 
+            WHERE isbn = ? AND id_membre = ? AND date_rendu IS NULL
+        """, (str(date.today()), isbn, id_membre))
+        self.conn.commit()
         return "Succès : Le livre a bien été rendu !"
 
-    def sauvegarder_donnees(self):
-        donnees = {
-            "livres": [livre.to_dict() for livre in self.livres],
-            "membres": [membre.to_dict() for membre in self.membres],
-            "emprunts": [emprunt.to_dict() for emprunt in self.emprunts],
-        }
-
-        with open("data/donnees.json", "w", encoding="utf-8") as fichier:
-            json.dump(donnees, fichier, indent=2, ensure_ascii=False)
-
-    def charger_donnees(self):
-        try:
-            with open("data/donnees.json", "r", encoding="utf-8") as fichier:
-                donnees = json.load(fichier)
-            self.livres = [Livre.from_dict(l) for l in donnees.get("livres", [])]
-            self.membres = [Membre.from_dict(m) for m in donnees.get("membres", [])]
-            self.emprunts = [Emprunt.from_dict(e) for e in donnees.get("emprunts", [])]
-
-        except FileNotFoundError:
-            pass
-
-
-    # 1. Afficher tous les livres
+    # --- AFFICHAGES ---
     def afficher_livres(self):
-        return self.livres
+        self.curseur.execute("SELECT * FROM livres")
+        return [Livre(res[0], res[1], res[2], res[3], bool(res[4])) for res in self.curseur.fetchall()]
 
-    # 2. Rechercher un livre par titre ou auteur
-    def rechercher_livre(self, mot_cle):
-        resultats = []
-        # On met tout en minuscules pour que la recherche ignore les majuscules
-        mot_cle = mot_cle.lower()
-        for livre in self.livres:
-            if mot_cle in livre.titre.lower() or mot_cle in livre.auteur.lower():
-                resultats.append(livre)
-        return resultats
-
-    # 3. Afficher tous les membres
     def afficher_membres(self):
-        return self.membres
+        self.curseur.execute("SELECT * FROM membres")
+        membres = []
+        for res in self.curseur.fetchall():
+            m = Membre(res[0], res[1], res[2])
+            self.curseur.execute("SELECT isbn FROM emprunts WHERE id_membre = ? AND date_rendu IS NULL", (m.id_membre,))
+            m.livres_empruntes = [ligne[0] for ligne in self.curseur.fetchall()]
+            membres.append(m)
+        return membres
 
-    # 4. Afficher les emprunts en cours
+    def rechercher_livre(self, mot_cle):
+        # %mot_cle% permet de chercher le mot n'importe où dans le titre ou l'auteur
+        self.curseur.execute("SELECT * FROM livres WHERE titre LIKE ? OR auteur LIKE ?",
+                             (f"%{mot_cle}%", f"%{mot_cle}%"))
+        return [Livre(res[0], res[1], res[2], res[3], bool(res[4])) for res in self.curseur.fetchall()]
+
     def afficher_emprunts_en_cours(self):
-        # On utilise la méthode est_en_cours() que tu avais écrite dans emprunt.py !
-        return [emprunt for emprunt in self.emprunts if emprunt.est_en_cours()]
-
+        self.curseur.execute("SELECT isbn, id_membre, date_emprunt FROM emprunts WHERE date_rendu IS NULL")
+        return [Emprunt(res[0], res[1], res[2], None) for res in self.curseur.fetchall()]
         
 
 

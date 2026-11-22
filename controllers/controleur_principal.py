@@ -14,8 +14,8 @@ class Controleur:
             if choix == "1":
                 infos = self.vue.demander_infos_livre()
                 nouveau_livre = Livre(infos["isbn"], infos["titre"], infos["auteur"], infos["maison_edition"])
+                # On ajoute le livre (la sauvegarde SQL est automatique)
                 self.biblio.ajouter_livre(nouveau_livre)
-                self.biblio.sauvegarder_donnees()
                 self.vue.afficher_message("Livre ajouté avec succès !")
 
             elif choix == "2":
@@ -42,8 +42,8 @@ class Controleur:
             elif choix == "4":
                 infos = self.vue.demander_infos_membre()
                 nouveau_membre = Membre(infos["id_membre"], infos["nom"], infos["prenoms"])
+                # On ajoute le membre (la sauvegarde SQL est automatique)
                 self.biblio.ajouter_membre(nouveau_membre)
-                self.biblio.sauvegarder_donnees()
                 self.vue.afficher_message("Membre inscrit avec succès !")
 
             elif choix == "5":
@@ -59,16 +59,14 @@ class Controleur:
                 isbn = self.vue.demander_chaine("Entrez l'ISBN du livre : ")
                 id_membre = self.vue.demander_chaine("Entrez l'ID du membre : ")
                 resultat = self.biblio.emprunter_livre(isbn, id_membre)
-                if not resultat.startswith("Erreur"):
-                    self.biblio.sauvegarder_donnees()
+                # Plus besoin de tester "startswith('Erreur')", on affiche juste le résultat
                 self.vue.afficher_message(resultat)
 
             elif choix == "7":
                 isbn = self.vue.demander_chaine("Entrez l'ISBN du livre à rendre : ")
                 id_membre = self.vue.demander_chaine("Entrez l'ID du membre : ")
                 resultat = self.biblio.rendre_livre(isbn, id_membre)
-                if not resultat.startswith("Erreur"):
-                    self.biblio.sauvegarder_donnees()
+                # Plus besoin de tester "startswith('Erreur')"
                 self.vue.afficher_message(resultat)
 
             elif choix == "8":
@@ -81,8 +79,8 @@ class Controleur:
                         self.vue.afficher_message(f"Livre ISBN: {e.isbn} | Membre ID: {e.id_membre} | Date: {e.date_emprunt}")
 
             elif choix == "0":
-                self.vue.afficher_message("Sauvegarde et fermeture du programme...")
-                self.biblio.sauvegarder_donnees()
+                # On ne sauvegarde plus manuellement
+                self.vue.afficher_message("Fermeture du programme...")
                 break
 
             else:
